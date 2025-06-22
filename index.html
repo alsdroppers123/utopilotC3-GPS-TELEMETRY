@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>ESP32 Mission Planner</title>
+  <!-- MQTT Library -->
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin="">
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #fff;
+      color: #222;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+    h1 {
+      text-align: center;
+      color: #007acc;
+      margin: 6px 0;
+      font-size: 1rem;
+    }
+    .container {
+      display: flex;
+      height: calc(100vh - 30px);
+      padding: 0 5px;
+      box-sizing: border-box;
+    }
+    #telemetry {
+      flex: 0 0 340px;
+      background: #f7f7f7;
+      border-radius: 8px;
+      padding: 12px 16px;
+      box-shadow: 0 0 5px rgba(0,0,0,0.1);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      font-size: 0.85rem;
+      overflow-y: auto;
+    }
+    #telemetry h3 {
+      margin: 0 0 8px 0;
+      color: #007acc;
+      font-size: 1rem;
+      border-bottom: 1px solid #ddd;
+      padding-bottom: 6px;
+    }
+    #telemetry .data-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    #telemetry .data-label {
+      font-weight: 600;
+      color: #444;
+    }
+    #telemetry .data-value {
+      font-weight: bold;
+      color: #000;
+    }
+    .throttle-container {
+      margin-top: 10px;
+    }
+    .throttle-bar-background {
+      width: 100%;
+      height: 20px;
+      background: #ddd;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    #throttleBar {
+      height: 100%;
+      width: 0;
+      background: #007acc;
+      transition: width 0.3s ease;
+      border-radius: 10px 0 0 10px;
+    }
+    #throttleValue {
+      text-align: center;
+      font-weight: bold;
+      margin-top: 2px;
+    }
+    #horizon-container {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #ccc;
+      display: flex;
+      justify-content: center;
+      height: 200px;
+    }
+    #horizon {
+      background-color: #eaeaea;
+      border-radius: 50%;
+      border: 1px solid #ccc;
+      width: 180px;
+      height: 180px;
+      box-shadow: 0 0 8px rgba(0,0,0,0.1);
+    }
+    #map-container {
+      flex: 1;
+      margin-left: 10px;
+      border-radius: 8px;
+      position: relative;
+      overflow: hidden;
+    }
+    #map {
+      width: 100%;
+      height: 100%;
+    }
+    #waypoint-controls {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 1000;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 8px;
+      border-radius: 5px;
+      box-shadow: 0 0 5px rgba(0,0,0,0.2);
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    #waypoint-controls button {
+      margin: 0;
+      padding: 6px 12px;
+      background: #007acc;
+      color: white;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+    #waypoint-controls button:hover {
+      background: #006bb3;
+    }
+    .leaflet-tile {
+      filter: none !important;
+    }
+    @media (max-width: 768px) {
+      .container {
+        flex-direction: column;
+      }
+      #telemetry {
+        width: 100%;
+        height: auto;
+        max-height: 400px;
+        margin-bottom: 10px;
+      }
+      #horizon-container {
+        height: 180px;
+      }
+      #horizon {
+        width: 140px !important;
+        height: 140px !important;
+      }
+      #map-container {
+        margin-left: 0;
+        height: 300px;
+      }
+      #waypoint-controls {
+        flex-direction: row;
+        top: auto;
+        bottom: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>ESP32 Mission Planner</h1>
+  <div class="container">
+    <div id="telemetry">
+      <h3>Telemetry Data</h3>
+      <div class="data-row" title="Altitude in meters"><div class="data-label">Altitude:</div> <div id="altitude" class="data-value">0</div></div>
+      <div class="data-row" title="Latitude"><div class="data-label">Latitude:</div> <div id="latitude" class="data-value">0</div></div>
+      <div class="data-row" title="Longitude"><div class="data-label">Longitude:</div> <div id="longitude" class="data-value">0</div></div>
+      <div class="data-row" title="RC Signal Status"><div class="data-label">Signal:</div> <div id="signal" class="data-value">Unknown</div></div>
+      <div class="data-row" title="Altitude Hold"><div class="data-label">Alt Hold:</div> <div id="altHold" class="data-value">Off</div></div>
+      <div class="data-row" title="Differential Thrust"><div class="data-label">Diff Thrust:</div> <div id="diffThrust" class="data-value">Off</div></div>
+      <div class="data-row" title="Gyro Stabilization"><div class="data-label">Gyro:</div> <div id="gyro" class="data-value">Inactive</div></div>
+
+      <div class="data-row" style="flex-direction: column; gap: 4px; margin-top: 12px;">
+        <div class="data-label">Throttle:</div>
+        <div class="throttle-bar-background">
+          <div id="throttleBar"></div>
+        </div>
+        <div id="throttleValue">0%</div>
+      </div>
+
+      <div id="horizon-container">
+        <h3>Artificial Horizon</h3>
+        <canvas id="horizon" width="180" height="180"></canvas>
+      </div>
+    </div>
+
+    <div id="map-container">
+      <div id="map"></div>
+      <div id="waypoint-controls">
+        <button id="add-waypoint">Add Waypoint</button>
+        <button id="clear-waypoints">Clear All</button>
+        <button id="upload-mission">Upload Mission</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // MQTT Client
+    const client = mqtt.connect('wss://test.mosquitto.org:8081');
+    
+    // Map and Waypoint Variables
+    let map;
+    let waypoints = [];
+    let waypointMarkers = [];
+    let polyline;
+    let vehicleMarker;
+    let vehiclePath = [];
+    let pathLayer;
+
+    // Initialize when DOM is loaded
+    document.addEventListener('DOMContentLoaded', function() {
+      initMap();
+      initMQTT();
+    });
+
+    function initMap() {
+      // Create map centered at (0,0) with low zoom
+      map = L.map('map').setView([0, 0], 2);
+      
+      // Add OpenStreetMap tiles
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        noWrap: true,
+        maxZoom: 19
+      }).addTo(map);
+
+      // Create vehicle marker (initially hidden)
+      const vehicleIcon = L.divIcon({
+        className: 'vehicle-marker',
+        html: '<div style="background-color: red; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white;"></div>',
+        iconSize: [16, 16]
+      });
+      vehicleMarker = L.marker([0, 0], {icon: vehicleIcon, zIndexOffset: 1000}).addTo(map);
+      vehicleMarker.setOpacity(0);
+
+      // Add click handler for waypoints
+      map.on('click', function(e) {
+        addWaypoint(e.latlng);
+      });
+
+      // Initialize buttons
+      document.getElementById('add-waypoint').addEventListener('click', function() {
+        // Add waypoint at current position if available
+        const lat = parseFloat(document.getElementById('latitude').textContent);
+        const lng = parseFloat(document.getElementById('longitude').textContent);
+        if (lat !== 0 && lng !== 0) {
+          addWaypoint([lat, lng]);
+        } else {
+          // Otherwise add at map center
+          addWaypoint(map.getCenter());
+        }
+      });
+
+      document.getElementById('clear-waypoints').addEventListener('click', clearWaypoints);
+      document.getElementById('upload-mission').addEventListener('click', uploadMission);
+    }
+
+    function initMQTT() {
+      client.on('connect', () => {
+        console.log('MQTT connected');
+        client.subscribe('esp32/telemetry');
+      });
+
+      client.on('message', (topic, message) => {
+        try {
+          const data = JSON.parse(message.toString());
+          updateTelemetry(data);
+          if (data.latitude && data.longitude) {
+            updateVehiclePosition(data.latitude, data.longitude);
+          }
+        } catch (e) {
+          console.error("Error parsing telemetry:", e);
+        }
+      });
+    }
+
+    function updateTelemetry(data) {
+      if ('altitude' in data) document.getElementById('altitude').textContent = data.altitude.toFixed(2);
+      if ('latitude' in data) document.getElementById('latitude').textContent = data.latitude.toFixed(6);
+      if ('longitude' in data) document.getElementById('longitude').textContent = data.longitude.toFixed(6);
+
+      if ('altitudeHoldEnabled' in data)
+        document.getElementById('altHold').textContent = data.altitudeHoldEnabled ? 'On' : 'Off';
+      if ('differentialThrustEnabled' in data)
+        document.getElementById('diffThrust').textContent = data.differentialThrustEnabled ? 'On' : 'Off';
+      if ('gyroStabilizationEnabled' in data)
+        document.getElementById('gyro').textContent = data.gyroStabilizationEnabled ? 'On' : 'Inactive';
+
+      if ('signalStatus' in data)
+        document.getElementById('signal').textContent = data.signalStatus;
+
+      if ('throttleSignal' in data) {
+        const raw = data.throttleSignal;
+        const throttle = Math.min(Math.max((raw - 1000) / 10, 0), 100);
+        document.getElementById('throttleValue').textContent = `${throttle.toFixed(0)}%`;
+        document.getElementById('throttleBar').style.width = `${throttle}%`;
+      }
+
+      if ('pitch' in data && 'roll' in data) drawHorizon(data.pitch, data.roll);
+    }
+
+    function updateVehiclePosition(lat, lng) {
+      const newPos = [lat, lng];
+      vehicleMarker.setLatLng(newPos);
+      vehicleMarker.setOpacity(1);
+      
+      // Add to path
+      vehiclePath.push(newPos);
+      if (vehiclePath.length > 100) {
+        vehiclePath.shift();
+      }
+      
+      // Update path layer
+      if (pathLayer) map.removeLayer(pathLayer);
+      if (vehiclePath.length > 1) {
+        pathLayer = L.polyline(vehiclePath, {color: 'red', weight: 2}).addTo(map);
+      }
+      
+      // Auto-center map if we have few waypoints
+      if (waypoints.length < 3) {
+        map.setView(newPos, 17);
+      }
+    }
+
+    function addWaypoint(latlng) {
+      waypoints.push(latlng);
+      
+      const marker = L.marker(latlng, {
+        draggable: true,
+        icon: L.divIcon({
+          className: 'waypoint-marker',
+          html: `<div style="background-color: #007acc; color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-weight: bold;">${waypoints.length}</div>`,
+          iconSize: [24, 24]
+        })
+      }).addTo(map);
+      
+      marker.on('dragend', function() {
+        const index = waypointMarkers.indexOf(marker);
+        if (index !== -1) {
+          waypoints[index] = marker.getLatLng();
+          updatePath();
+        }
+      });
+      
+      waypointMarkers.push(marker);
+      updatePath();
+    }
+
+    function updatePath() {
+      if (polyline) map.removeLayer(polyline);
+      if (waypoints.length > 1) {
+        polyline = L.polyline(waypoints, {color: '#007acc'}).addTo(map);
+      }
+    }
+
+    function clearWaypoints() {
+      waypoints = [];
+      waypointMarkers.forEach(marker => map.removeLayer(marker));
+      waypointMarkers = [];
+      if (polyline) map.removeLayer(polyline);
+    }
+
+    function uploadMission() {
+      if (waypoints.length === 0) {
+        alert('No waypoints to upload!');
+        return;
+      }
+      
+      const mission = {
+        type: 'mission',
+        waypoints: waypoints.map(wp => [wp.lat, wp.lng])
+      };
+      
+      client.publish('esp32/mission', JSON.stringify(mission));
+      alert(`Mission with ${waypoints.length} waypoints uploaded!`);
+    }
+
+    function drawHorizon(pitch, roll) {
+      const canvas = document.getElementById('horizon');
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width, h = canvas.height;
+      const cx = w / 2, cy = h / 2;
+      ctx.clearRect(0, 0, w, h);
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(-roll * Math.PI / 180);
+      const offset = pitch * 2;
+
+      // Sky
+      const skyGradient = ctx.createLinearGradient(0, -h, 0, 0);
+      skyGradient.addColorStop(0, '#1a75ff');
+      skyGradient.addColorStop(1, '#66a3ff');
+      ctx.fillStyle = skyGradient;
+      ctx.fillRect(-w, -h * 2 + offset, w * 2, h * 2);
+
+      // Ground
+      const groundGradient = ctx.createLinearGradient(0, 0, 0, h);
+      groundGradient.addColorStop(0, '#8B4513');
+      groundGradient.addColorStop(1, '#A0522D');
+      ctx.fillStyle = groundGradient;
+      ctx.fillRect(-w, offset, w * 2, h * 2);
+
+      // Horizon line
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-w, offset);
+      ctx.lineTo(w, offset);
+      ctx.stroke();
+
+      // Pitch lines
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1;
+      for (let i = -3; i <= 3; i++) {
+        if (i === 0) continue;
+        const y = offset + i * 20;
+        ctx.beginPath();
+        ctx.moveTo(-30, y);
+        ctx.lineTo(30, y);
+        if (Math.abs(i) === 1 || Math.abs(i) === 2) {
+          ctx.fillStyle = '#fff';
+          ctx.fillText(Math.abs(i * 10).toString(), 35, y + 4);
+        }
+        ctx.stroke();
+      }
+
+      ctx.restore();
+      
+      // Draw fixed aircraft reference
+      ctx.strokeStyle = '#f00';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      // Wings
+      ctx.moveTo(cx - 40, cy);
+      ctx.lineTo(cx + 40, cy);
+      // Fuselage
+      ctx.moveTo(cx, cy - 20);
+      ctx.lineTo(cx, cy + 20);
+      ctx.stroke();
+    }
+  </script>
+</body>
+</html>
