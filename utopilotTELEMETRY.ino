@@ -20,9 +20,9 @@
 #define PPM_FRAME_GAP 3000
 #define CALIBRATION_SAMPLES 500
 
-// WiFi and MQTT
-const char* ssid = "abhishekrijal_2.4";
-const char* password = "JWDLY2O936KDK4%";
+// WiFi & MQTT
+const char* ssid = "telemetry";
+const char* password = "telemetry";
 const char* mqtt_server = "test.mosquitto.org";
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -35,7 +35,7 @@ Servo esc1, esc2, servoRight, servoLeft, servoElevator;
 TinyGPSPlus gps;
 HardwareSerial GPS_Serial(1);
 
-// State variables
+// State
 volatile uint16_t ppmChannels[9] = {1500};
 volatile uint8_t ppmIndex = 0;
 volatile uint32_t lastPPMTime = 0;
@@ -48,17 +48,18 @@ bool altitudeHoldEnabled = false;
 bool altitudeHoldEngaged = false;
 int throttleSignal = 1000;
 
+// Sensor data
 float accelX, accelY, accelZ, gyroX, gyroY;
 float roll, pitch, dt;
 float lastAltitude = 0, currentAltitude = 0, targetAltitude = 0;
 float altitudeError = 0, altitudeCorrection = 0;
 float altitudeDerivative = 0, altitudePitchCorrection = 0;
 
-// PID
+// PID constants
 float kP = 2.7, kI = 0.0, kD = 2;
 float altitudeKP = 2.0, altitudeKD = 0.8, altitudePitchKP = 1.5;
 
-// GPS
+// GPS data
 String gpsLatitude = "0.0";
 String gpsLongitude = "0.0";
 
@@ -79,6 +80,7 @@ void IRAM_ATTR ppmISR() {
   else if (ppmIndex < 9) ppmChannels[ppmIndex++] = duration;
 }
 
+// Calibrate IMU
 void calibrateMPU() {
   float rollSum = 0, pitchSum = 0;
   for (int i = 0; i < CALIBRATION_SAMPLES; i++) {
@@ -96,35 +98,36 @@ void calibrateMPU() {
   calibrated = true;
 }
 
+// Web UI Handlers
 void handleRoot() {
   String html = R"rawliteral(
-    <!DOCTYPE html><html><head><meta charset="UTF-8"><title>Flight Controller</title>
-    <script>
-      function fetchGPS() {
-        fetch('/gps')
-          .then(response => response.json())
-          .then(data => {
-            document.getElementById('lat').textContent = data.lat;
-            document.getElementById('lon').textContent = data.lon;
-          });
-      }
-      setInterval(fetchGPS, 1000);
-      window.onload = fetchGPS;
-    </script></head><body>
-    <h1>PID Settings</h1>
-    <form method='GET' action='/update'>
-      kP:<input name='kP' value=")rawliteral" + String(kP) + R"rawliteral('"><br>
-      kI:<input name='kI' value=")rawliteral" + String(kI) + R"rawliteral('"><br>
-      kD:<input name='kD' value=")rawliteral" + String(kD) + R"rawliteral('"><br>
-      Altitude KP:<input name='altitudeKP' value=")rawliteral" + String(altitudeKP) + R"rawliteral('"><br>
-      Altitude KD:<input name='altitudeKD' value=")rawliteral" + String(altitudeKD) + R"rawliteral('"><br>
-      <input type='submit' value='Update'>
-    </form>
-    <form action='/calibrate'><input type='submit' value='Calibrate'></form>
-    <h2>GPS Coordinates</h2>
-    Latitude: <span id='lat'>Loading...</span><br>
-    Longitude: <span id='lon'>Loading...</span><br>
-    </body></html>
+  <!DOCTYPE html><html><head><title>Flight Controller</title>
+  <script>
+    function fetchGPS() {
+      fetch('/gps')
+        .then(response => response.json())
+        .then(data => {
+          document.getElementById('lat').textContent = data.lat;
+          document.getElementById('lon').textContent = data.lon;
+        });
+    }
+    setInterval(fetchGPS, 1000);
+    window.onload = fetchGPS;
+  </script></head><body>
+  <h1>PID Settings</h1>
+  <form method='GET' action='/update'>
+    kP:<input name='kP' value=")rawliteral" + String(kP) + R"rawliteral("><br>
+    kI:<input name='kI' value=")rawliteral" + String(kI) + R"rawliteral("><br>
+    kD:<input name='kD' value=")rawliteral" + String(kD) + R"rawliteral("><br>
+    Altitude KP:<input name='altitudeKP' value=")rawliteral" + String(altitudeKP) + R"rawliteral("><br>
+    Altitude KD:<input name='altitudeKD' value=")rawliteral" + String(altitudeKD) + R"rawliteral("><br>
+    <input type='submit' value='Update'>
+  </form>
+  <form action='/calibrate'><input type='submit' value='Calibrate'></form>
+  <h2>GPS Coordinates</h2>
+  Latitude: <span id='lat'>Loading...</span><br>
+  Longitude: <span id='lon'>Loading...</span><br>
+  </body></html>
   )rawliteral";
   server.send(200, "text/html", html);
 }
@@ -148,15 +151,28 @@ void handleGPS() {
   server.send(200, "application/json", json);
 }
 
-void reconnectMQTT() {
-  while (!mqttClient.connected()) {
+// Connection handling
+unsigned long lastWiFiCheck = 0, lastMQTTCheck = 0;
+
+void checkWiFi() {
+  if (WiFi.status() != WL_CONNECTED && millis() - lastWiFiCheck > 5000) {
+    Serial.println("Reconnecting WiFi...");
+    WiFi.disconnect();
+    WiFi.begin(ssid, password);
+    lastWiFiCheck = millis();
+  }
+}
+
+void checkMQTT() {
+  if (WiFi.status() == WL_CONNECTED && !mqttClient.connected() && millis() - lastMQTTCheck > 5000) {
+    Serial.println("Connecting to MQTT...");
     if (mqttClient.connect("ESP32FlightController")) {
-      Serial.println("Connected to MQTT");
+      Serial.println("MQTT Connected");
     } else {
-      Serial.print("MQTT connect failed: ");
+      Serial.print("MQTT Failed, state: ");
       Serial.println(mqttClient.state());
-      delay(2000);
     }
+    lastMQTTCheck = millis();
   }
 }
 
@@ -183,12 +199,6 @@ void setup() {
   GPS_Serial.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);
 
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("WiFi connected. IP: " + WiFi.localIP().toString());
-
   mqttClient.setServer(mqtt_server, 1883);
 
   server.on("/", handleRoot);
@@ -202,7 +212,8 @@ void loop() {
   static unsigned long lastTime = millis();
   static unsigned long lastMqttPublish = millis();
 
-  if (!mqttClient.connected()) reconnectMQTT();
+  checkWiFi();
+  checkMQTT();
   mqttClient.loop();
   server.handleClient();
 
@@ -239,8 +250,8 @@ void loop() {
   rollFiltered = 0.98 * (rollFiltered + gyroX * dt) + 0.02 * accelRoll;
   pitchFiltered = 0.98 * (pitchFiltered + gyroY * dt) + 0.02 * accelPitch;
 
-  float rollError = 0 - rollFiltered;
-  float pitchError = 0 - pitchFiltered;
+  float rollError = -rollFiltered;
+  float pitchError = -pitchFiltered;
   float rollCorrection = gyroStabilizationEnabled ? kP * rollError : 0;
   float pitchCorrection = gyroStabilizationEnabled ? kP * pitchError : 0;
 
@@ -278,7 +289,7 @@ void loop() {
     esc2.writeMicroseconds(throttleSignal);
   }
 
-  if (millis() - lastMqttPublish > 50) {
+  if (millis() - lastMqttPublish > 500 && mqttClient.connected()) {
     String telemetryJson = "{";
     telemetryJson += "\"altitude\":" + String(currentAltitude, 2) + ",";
     telemetryJson += "\"pitch\":" + String(pitchFiltered, 2) + ",";
