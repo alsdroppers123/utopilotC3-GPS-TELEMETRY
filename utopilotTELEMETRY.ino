@@ -7,6 +7,7 @@
 #include <ESP32Servo.h>
 #include <TinyGPSPlus.h>
 #include <PubSubClient.h>
+#include <EEPROM.h>
 
 // Pins
 #define PPM_PIN 2
@@ -35,6 +36,16 @@ Servo esc1, esc2, servoRight, servoLeft, servoElevator;
 TinyGPSPlus gps;
 HardwareSerial GPS_Serial(1);
 
+// EEPROM configuration structure
+struct Config {
+  float kP, kI, kD;
+  float altitudeKP, altitudeKD, altitudePitchKP;
+  bool reverseAileron, reverseElevator;
+  bool reverseRightAileron, reverseLeftAileron, reverseElevatorServo;
+} config;
+
+#define EEPROM_SIZE sizeof(Config)
+
 // State
 volatile uint16_t ppmChannels[9] = {1500};
 volatile uint8_t ppmIndex = 0;
@@ -54,10 +65,6 @@ float roll, pitch, dt;
 float lastAltitude = 0, currentAltitude = 0, targetAltitude = 0;
 float altitudeError = 0, altitudeCorrection = 0;
 float altitudeDerivative = 0, altitudePitchCorrection = 0;
-
-// PID constants
-float kP = 2.7, kI = 0.0, kD = 2;
-float altitudeKP = 2.0, altitudeKD = 0.8, altitudePitchKP = 1.5;
 
 // GPS data
 String gpsLatitude = "0.0";
@@ -98,10 +105,47 @@ void calibrateMPU() {
   calibrated = true;
 }
 
+// EEPROM functions
+void loadEEPROM() {
+  EEPROM.begin(EEPROM_SIZE);
+  EEPROM.get(0, config);
+  if (isnan(config.kP)) {
+    config.kP = 2.7;
+    config.kI = 0.0;
+    config.kD = 2.0;
+    config.altitudeKP = 2.0;
+    config.altitudeKD = 0.8;
+    config.altitudePitchKP = 1.5;
+    config.reverseAileron = false;
+    config.reverseElevator = false;
+    config.reverseRightAileron = false;
+    config.reverseLeftAileron = false;
+    config.reverseElevatorServo = false;
+    EEPROM.put(0, config);
+    EEPROM.commit();
+  }
+}
+
+void saveEEPROM() {
+  EEPROM.put(0, config);
+  EEPROM.commit();
+}
+
 // Web UI Handlers
 void handleRoot() {
   String html = R"rawliteral(
   <!DOCTYPE html><html><head><title>Flight Controller</title>
+  <style>
+    .section {
+      margin-bottom: 20px;
+      padding: 15px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+    }
+    h1, h2 {
+      color: #333;
+    }
+  </style>
   <script>
     function fetchGPS() {
       fetch('/gps')
@@ -114,36 +158,81 @@ void handleRoot() {
     setInterval(fetchGPS, 1000);
     window.onload = fetchGPS;
   </script></head><body>
-  <h1>PID Settings</h1>
-  <form method='GET' action='/update'>
-    kP:<input name='kP' value=")rawliteral" + String(kP) + R"rawliteral("><br>
-    kI:<input name='kI' value=")rawliteral" + String(kI) + R"rawliteral("><br>
-    kD:<input name='kD' value=")rawliteral" + String(kD) + R"rawliteral("><br>
-    Altitude KP:<input name='altitudeKP' value=")rawliteral" + String(altitudeKP) + R"rawliteral("><br>
-    Altitude KD:<input name='altitudeKD' value=")rawliteral" + String(altitudeKD) + R"rawliteral("><br>
-    <input type='submit' value='Update'>
-  </form>
-  <form action='/calibrate'><input type='submit' value='Calibrate'></form>
-  <h2>GPS Coordinates</h2>
-  Latitude: <span id='lat'>Loading...</span><br>
-  Longitude: <span id='lon'>Loading...</span><br>
+  <div class="section">
+    <h1>PID Settings</h1>
+    <form method='GET' action='/update'>
+      kP:<input name='kP' value=")rawliteral" + String(config.kP) + R"rawliteral("><br>
+      kI:<input name='kI' value=")rawliteral" + String(config.kI) + R"rawliteral("><br>
+      kD:<input name='kD' value=")rawliteral" + String(config.kD) + R"rawliteral("><br>
+      Altitude KP:<input name='altitudeKP' value=")rawliteral" + String(config.altitudeKP) + R"rawliteral("><br>
+      Altitude KD:<input name='altitudeKD' value=")rawliteral" + String(config.altitudeKD) + R"rawliteral("><br>
+      Altitude Pitch KP:<input name='altitudePitchKP' value=")rawliteral" + String(config.altitudePitchKP) + R"rawliteral("><br>
+      <input type='submit' value='Update'>
+    </form>
+  </div>
+
+  <div class="section">
+    <h2>Channel Reversal</h2>
+    <form method='GET' action='/reverse'>
+      Aileron Channel: <input type='checkbox' name='aileron' )rawliteral" + (config.reverseAileron ? "checked" : "") + R"rawliteral(><br>
+      Elevator Channel: <input type='checkbox' name='elevator' )rawliteral" + (config.reverseElevator ? "checked" : "") + R"rawliteral(><br>
+      <input type='submit' value='Save Channel Reversals'>
+    </form>
+  </div>
+
+  <div class="section">
+    <h2>Individual Servo Reversal</h2>
+    <form method='GET' action='/reverseServos'>
+      Right Aileron: <input type='checkbox' name='rightAileron' )rawliteral" + (config.reverseRightAileron ? "checked" : "") + R"rawliteral(><br>
+      Left Aileron: <input type='checkbox' name='leftAileron' )rawliteral" + (config.reverseLeftAileron ? "checked" : "") + R"rawliteral(><br>
+      Elevator Servo: <input type='checkbox' name='elevatorServo' )rawliteral" + (config.reverseElevatorServo ? "checked" : "") + R"rawliteral(><br>
+      <input type='submit' value='Save Servo Reversals'>
+    </form>
+  </div>
+
+  <div class="section">
+    <form action='/calibrate'><input type='submit' value='Calibrate IMU'></form>
+  </div>
+
+  <div class="section">
+    <h2>GPS Coordinates</h2>
+    Latitude: <span id='lat'>Loading...</span><br>
+    Longitude: <span id='lon'>Loading...</span><br>
+  </div>
   </body></html>
   )rawliteral";
   server.send(200, "text/html", html);
 }
 
 void handleUpdate() {
-  if (server.hasArg("kP")) kP = server.arg("kP").toFloat();
-  if (server.hasArg("kI")) kI = server.arg("kI").toFloat();
-  if (server.hasArg("kD")) kD = server.arg("kD").toFloat();
-  if (server.hasArg("altitudeKP")) altitudeKP = server.arg("altitudeKP").toFloat();
-  if (server.hasArg("altitudeKD")) altitudeKD = server.arg("altitudeKD").toFloat();
-  server.send(200, "text/plain", "Updated");
+  if (server.hasArg("kP")) config.kP = server.arg("kP").toFloat();
+  if (server.hasArg("kI")) config.kI = server.arg("kI").toFloat();
+  if (server.hasArg("kD")) config.kD = server.arg("kD").toFloat();
+  if (server.hasArg("altitudeKP")) config.altitudeKP = server.arg("altitudeKP").toFloat();
+  if (server.hasArg("altitudeKD")) config.altitudeKD = server.arg("altitudeKD").toFloat();
+  if (server.hasArg("altitudePitchKP")) config.altitudePitchKP = server.arg("altitudePitchKP").toFloat();
+  saveEEPROM();
+  server.send(200, "text/plain", "PID settings updated. <a href='/'>Back</a>");
+}
+
+void handleReverse() {
+  config.reverseAileron = server.hasArg("aileron");
+  config.reverseElevator = server.hasArg("elevator");
+  saveEEPROM();
+  server.send(200, "text/plain", "Channel reversal settings updated. <a href='/'>Back</a>");
+}
+
+void handleReverseServos() {
+  config.reverseRightAileron = server.hasArg("rightAileron");
+  config.reverseLeftAileron = server.hasArg("leftAileron");
+  config.reverseElevatorServo = server.hasArg("elevatorServo");
+  saveEEPROM();
+  server.send(200, "text/plain", "Servo reversal settings updated. <a href='/'>Back</a>");
 }
 
 void handleCalibrate() {
   calibrateMPU();
-  server.send(200, "text/plain", "Calibrated");
+  server.send(200, "text/plain", "IMU Calibrated. <a href='/'>Back</a>");
 }
 
 void handleGPS() {
@@ -179,6 +268,11 @@ void checkMQTT() {
 void setup() {
   Serial.begin(115200);
   Wire.begin(6, 7);
+  
+  // Initialize EEPROM and load configuration
+  EEPROM.begin(EEPROM_SIZE);
+  loadEEPROM();
+  
   mpu.initialize();
   if (!mpu.testConnection()) while (1);
   calibrateMPU();
@@ -203,6 +297,8 @@ void setup() {
 
   server.on("/", handleRoot);
   server.on("/update", handleUpdate);
+  server.on("/reverse", handleReverse);
+  server.on("/reverseServos", handleReverseServos);
   server.on("/calibrate", handleCalibrate);
   server.on("/gps", handleGPS);
   server.begin();
@@ -252,14 +348,14 @@ void loop() {
 
   float rollError = -rollFiltered;
   float pitchError = -pitchFiltered;
-  float rollCorrection = gyroStabilizationEnabled ? kP * rollError : 0;
-  float pitchCorrection = gyroStabilizationEnabled ? kP * pitchError : 0;
+  float rollCorrection = gyroStabilizationEnabled ? config.kP * rollError : 0;
+  float pitchCorrection = gyroStabilizationEnabled ? config.kP * pitchError : 0;
 
   if (altitudeHoldEnabled && altitudeHoldEngaged) {
     altitudeError = targetAltitude - currentAltitude;
     altitudeDerivative = (lastAltitude - currentAltitude) / dt;
-    altitudeCorrection = altitudeKP * altitudeError + altitudeKD * altitudeDerivative;
-    altitudePitchCorrection = altitudePitchKP * altitudeError;
+    altitudeCorrection = config.altitudeKP * altitudeError + config.altitudeKD * altitudeDerivative;
+    altitudePitchCorrection = config.altitudePitchKP * altitudeError;
     lastAltitude = currentAltitude;
   } else {
     altitudeCorrection = 0;
@@ -274,9 +370,28 @@ void loop() {
   smoothElevator = alpha * targetElevator + (1 - alpha) * smoothElevator;
   throttleSignal = constrain(ch3Value + altitudeCorrection, 1000, 2000);
 
-  servoRight.write(180 - smoothAileron);
-  servoLeft.write(smoothAileron);
-  servoElevator.write(180 - smoothElevator);
+  // Apply servo reversals
+  int rightAileronPos = smoothAileron;
+  int leftAileronPos = smoothAileron;
+  int elevatorPos = smoothElevator;
+
+  if (config.reverseRightAileron) rightAileronPos = 180 - rightAileronPos;
+  if (config.reverseLeftAileron) leftAileronPos = 180 - leftAileronPos;
+  if (config.reverseElevatorServo) elevatorPos = 180 - elevatorPos;
+
+  if (config.reverseAileron) {
+    servoRight.write(leftAileronPos);  // Note the swap when channel is reversed
+    servoLeft.write(rightAileronPos);
+  } else {
+    servoRight.write(rightAileronPos);
+    servoLeft.write(leftAileronPos);
+  }
+
+  if (config.reverseElevator) {
+    servoElevator.write(180 - elevatorPos);
+  } else {
+    servoElevator.write(elevatorPos);
+  }
 
   if (differentialThrustEnabled) {
     int yawOffset = map(ch4Value, 1000, 2000, -100, 100);
