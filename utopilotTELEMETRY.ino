@@ -23,8 +23,8 @@
 #define CALIBRATION_SAMPLES 500
 
 // WiFi & MQTT
-const char* ssid = "abhishekrijal_2.4";
-const char* password = "JWDLY2O936KDK4%";
+const char* ssid = "telemetry";
+const char* password = "telemetry";
 const char* mqtt_server = "test.mosquitto.org";
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
