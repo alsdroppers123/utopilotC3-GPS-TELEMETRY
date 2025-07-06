@@ -16,16 +16,21 @@
 #define ELEVATOR_SERVO_PIN 10
 #define RUDDER 1
 #define ESC1_PIN 0
-#define ESC2_PIN 3
+#define ESC2_PIN 4
 #define GPS_RX 20
 #define GPS_TX 21
 #define PPM_FRAME_GAP 3000
 #define CALIBRATION_SAMPLES 500
+#define BATTERY_ADC_PIN 3
 
 // WiFi & MQTT
-const char* ssid = "telemetry";
-const char* password = "telemetry";
+const char* ssid = "abhishekrijal_2.4";
+const char* password = "JWDLY2O936KDK4%";
 const char* mqtt_server = "test.mosquitto.org";
+const float R1 = 9500; // ohms
+const float R2 = 1800; // ohms
+const float ADC_REF = 3.3; // ESP32-C3 max ADC input voltage
+const int ADC_MAX = 4095;  // 12-bit ADC
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
@@ -308,6 +313,14 @@ void checkMQTT() {
   }
 }
 
+float readBatteryVoltage() {
+  int adcValue = analogRead(BATTERY_ADC_PIN);
+  float voltageAtPin = (adcValue * ADC_REF) / ADC_MAX;
+  float batteryVoltage = voltageAtPin * (R1 + R2) / R2 * 0.942;
+  return batteryVoltage;
+}
+
+
 void setup() {
   Serial.begin(115200);
   Wire.begin(6, 7);
@@ -393,6 +406,17 @@ void loop() {
       gpsLongitude = String(gps.location.lng(), 6);
     }
   }
+
+static unsigned long lastBatRead = 0;
+static float batteryVoltage = 0;
+
+if (millis() - lastBatRead > 1000) {
+  batteryVoltage = readBatteryVoltage();
+  // Serial.print("Battery Voltage: ");
+  // Serial.println(batteryVoltage);
+  lastBatRead = millis();
+}
+
 
   // Read altitude
   currentAltitude = bmp.readAltitude(1013.25);
@@ -540,8 +564,8 @@ void loop() {
     telemetryJson += "\"gyroStabilizationEnabled\":" + String(gyroStabilizationEnabled ? "true" : "false") + ",";
     telemetryJson += "\"differentialThrustEnabled\":" + String(differentialThrustEnabled ? "true" : "false") + ",";
     telemetryJson += "\"altitudeHoldEnabled\":" + String(altitudeHoldEnabled ? "true" : "false") + ",";
-    telemetryJson += "\"altitudeHoldEngaged\":" + String(altitudeHoldEngaged ? "true" : "false") + ",";
-    telemetryJson += "\"throttleSignal\":" + String(throttleSignal);
+    telemetryJson += "\"throttleSignal\":" + String(throttleSignal)+",";
+    telemetryJson += "\"batteryVoltage\":" + String(batteryVoltage);
     telemetryJson += "}";
     mqttClient.publish("esp32/telemetry", telemetryJson.c_str());
     lastMqttPublish = millis();
