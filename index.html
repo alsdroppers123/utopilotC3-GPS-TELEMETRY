@@ -188,6 +188,10 @@
       <div class="data-row" title="Altitude Hold"><div class="data-label">Alt Hold:</div> <div id="altHold" class="data-value">Off</div></div>
       <div class="data-row" title="Differential Thrust"><div class="data-label">Diff Thrust:</div> <div id="diffThrust" class="data-value">Off</div></div>
       <div class="data-row" title="Gyro Stabilization"><div class="data-label">Gyro:</div> <div id="gyro" class="data-value">Inactive</div></div>
+       <div class="data-row" title="Battery Voltage">
+      <div class="data-label">Battery:</div>
+      <div id="batteryVoltage" class="data-value">0</div>
+      </div>
 
       <div class="data-row" style="flex-direction: column; gap: 4px; margin-top: 12px;">
         <div class="data-label">Throttle:</div>
@@ -314,6 +318,11 @@
         document.getElementById('throttleValue').textContent = `${throttle.toFixed(0)}%`;
         document.getElementById('throttleBar').style.width = `${throttle}%`;
       }
+
+      if ('batteryVoltage' in data) {
+      document.getElementById('batteryVoltage').textContent = data.batteryVoltage.toFixed(2) + " V";
+      }
+
 
       if ('pitch' in data && 'roll' in data) drawHorizon(data.pitch, data.roll);
     }
