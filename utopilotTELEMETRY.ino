@@ -8,6 +8,8 @@
 #include <TinyGPSPlus.h>
 #include <PubSubClient.h>
 #include <EEPROM.h>
+#include <ArduinoJson.h>
+
 
 // Pins
 #define PPM_PIN 2
@@ -24,8 +26,8 @@
 #define BATTERY_ADC_PIN 3
 
 // WiFi & MQTT
-const char* ssid = "abhishekrijal_2.4";
-const char* password = "JWDLY2O936KDK4%";
+const char* ssid = "telemetry";
+const char* password = "telemetry";
 const char* mqtt_server = "test.mosquitto.org";
 const float R1 = 9500; // ohms
 const float R2 = 1800; // ohms
@@ -33,6 +35,23 @@ const float ADC_REF = 3.3; // ESP32-C3 max ADC input voltage
 const int ADC_MAX = 4095;  // 12-bit ADC
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
+
+
+struct Waypoint {
+  float lat;
+  float lon;
+  float alt;
+};
+
+#define MAX_WAYPOINTS 10
+Waypoint waypoints[MAX_WAYPOINTS];
+int waypointCount = 0;
+int currentWaypointIndex = 0;
+bool missionStarted = false;
+bool missionFinished = false;
+
+float homeLat = 0.0, homeLon = 0.0, homeAlt = 0.0;
+
 
 // Objects
 MPU6050 mpu;
@@ -320,6 +339,33 @@ float readBatteryVoltage() {
   return batteryVoltage;
 }
 
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String msg;
+  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
+
+  if (String(topic) == "esp32/waypoints") {
+    Serial.println("Received Waypoints:");
+    Serial.println(msg);
+
+    // Parse waypoints: expected format [{"lat":27.7,"lon":85.3,"alt":100}, {...}]
+    DynamicJsonDocument doc(1024);
+    DeserializationError err = deserializeJson(doc, msg);
+    if (!err) {
+      waypointCount = min((int)doc.size(), MAX_WAYPOINTS);
+      for (int i = 0; i < waypointCount; i++) {
+        waypoints[i].lat = doc[i]["lat"];
+        waypoints[i].lon = doc[i]["lon"];
+        waypoints[i].alt = doc[i]["alt"];
+      }
+      Serial.println("Waypoints loaded.");
+      missionFinished = false;
+      currentWaypointIndex = 0;
+    } else {
+      Serial.println("Failed to parse waypoints JSON.");
+    }
+  }
+}
+
 
 void setup() {
   Serial.begin(115200);
@@ -383,6 +429,10 @@ void setup() {
   server.on("/calibrate", handleCalibrate);
   server.on("/gps", handleGPS);
   server.begin();
+
+  mqttClient.setCallback(mqttCallback);
+  mqttClient.subscribe("esp32/waypoints");
+
 
   // Calibrate IMU
   calibrateMPU();
@@ -570,6 +620,59 @@ if (millis() - lastBatRead > 1000) {
     mqttClient.publish("esp32/telemetry", telemetryJson.c_str());
     lastMqttPublish = millis();
   }
+  bool ch8MissionToggle = (ppmChannels[7] >= 1800);  // CH8 high = mission active
+
+if (ch8MissionToggle && !missionStarted && waypointCount > 0) {
+  missionStarted = true;
+  missionFinished = false;
+  Serial.println("Mission started.");
+  if (gps.location.isValid()) {
+    homeLat = gps.location.lat();
+    homeLon = gps.location.lng();
+    homeAlt = currentAltitude;
+  }
+}
+
+if (!ch8MissionToggle) {
+  missionStarted = false;
+}
+
+  if (missionStarted && !missionFinished) {
+  Waypoint wp = waypoints[currentWaypointIndex];
+  float targetLat = wp.lat;
+  float targetLon = wp.lon;
+  float targetAlt = wp.alt;
+
+  float distanceToWP = TinyGPSPlus::distanceBetween(gps.location.lat(), gps.location.lng(), targetLat, targetLon);
+  float bearingToWP = TinyGPSPlus::courseTo(gps.location.lat(), gps.location.lng(), targetLat, targetLon);
+  
+  float headingError = bearingToWP - gps.course.deg();
+  if (headingError > 180) headingError -= 360;
+  if (headingError < -180) headingError += 360;
+
+  // Map heading error to rudder/yaw or differential thrust
+  int yawCorrection = map(headingError, -180, 180, -30, 30);
+  targetRudder = constrain(90 + yawCorrection, 60, 120);
+
+  // Altitude hold
+  targetAltitude = targetAlt;
+  altitudeHoldEnabled = true;
+  altitudeHoldEngaged = true;
+
+  // If close enough to waypoint, move to next
+  if (distanceToWP < 10) {
+    currentWaypointIndex++;
+    if (currentWaypointIndex >= waypointCount) {
+      missionFinished = true;
+      Serial.println("Mission complete, returning home.");
+      // Optional: Set home as final waypoint
+      waypoints[0] = { homeLat, homeLon, homeAlt };
+      waypointCount = 1;
+      currentWaypointIndex = 0;
+    }
+  }
+}
+
 
   delay(20);
 }
