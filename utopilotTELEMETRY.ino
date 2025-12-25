@@ -16,21 +16,21 @@
 #define RIGHT_AILERON_SERVO_PIN 8
 #define LEFT_AILERON_SERVO_PIN 9
 #define ELEVATOR_SERVO_PIN 10
-#define RUDDER 1
+#define RUDDER 3
 #define ESC1_PIN 0
-#define ESC2_PIN 4
+#define ESC2_PIN 1
 #define GPS_RX 20
 #define GPS_TX 21
 #define PPM_FRAME_GAP 3000
 #define CALIBRATION_SAMPLES 500
-#define BATTERY_ADC_PIN 3
+#define BATTERY_ADC_PIN 4
 
 // WiFi & MQTT
 const char* ssid = "telemetry";
 const char* password = "telemetry";
 const char* mqtt_server = "test.mosquitto.org";
-const float R1 = 9500; // ohms
-const float R2 = 1800; // ohms
+const float R1 = 6100; // ohms
+const float R2 = 4600; // ohms
 const float ADC_REF = 3.3; // ESP32-C3 max ADC input voltage
 const int ADC_MAX = 4095;  // 12-bit ADC
 WiFiClient espClient;
