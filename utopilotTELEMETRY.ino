@@ -9,6 +9,7 @@
 #include <PubSubClient.h>
 #include <EEPROM.h>
 #include <ArduinoJson.h>
+#include <ESPmDNS.h>
 
 
 // Pins
@@ -19,15 +20,15 @@
 #define RUDDER 3
 #define ESC1_PIN 0
 #define ESC2_PIN 1
-#define GPS_RX 20
-#define GPS_TX 21
+#define GPS_RX 21
+#define GPS_TX 20
 #define PPM_FRAME_GAP 3000
 #define CALIBRATION_SAMPLES 500
 #define BATTERY_ADC_PIN 4
 
 // WiFi & MQTT
-const char* ssid = "telemetry";
-const char* password = "telemetry";
+const char* ssid = "abhishekrijal_2.4";
+const char* password = "JWDLY2O936KDK4%";
 const char* mqtt_server = "test.mosquitto.org";
 const float R1 = 6100; // ohms
 const float R2 = 4600; // ohms
@@ -92,6 +93,11 @@ int throttleSignal = 1000;
 
 // Sensor data
 float accelX, accelY, accelZ, gyroX, gyroY, gyroZ;
+// IMU-based airspeed estimate
+float airspeed = 0.0;        // m/s
+float airspeedFiltered = 0.0;
+unsigned long lastAirspeedTime = 0;
+
 float roll, pitch, dt;
 float lastAltitude = 0, currentAltitude = 0, targetAltitude = 0;
 float altitudeError = 0, altitudeCorrection = 0;
@@ -113,6 +119,7 @@ String gpsLongitude = "0.0";
 #define ch4Value ppmChannels[3]
 #define ch7Value ppmChannels[6]
 #define ch9Value ppmChannels[4]
+
 
 // PPM Interrupt Service Routine
 void IRAM_ATTR ppmISR() {
@@ -301,9 +308,14 @@ void handleCalibrate() {
 }
 
 void handleGPS() {
-  String json = "{\"lat\":\"" + gpsLatitude + "\",\"lon\":\"" + gpsLongitude + "\"}";
+  String json = "{";
+  json += "\"lat\":\"" + gpsLatitude + "\",";
+  json += "\"lon\":\"" + gpsLongitude + "\",";
+  json += "\"airspeed\":" + String(airspeedFiltered, 2);
+  json += "}";
   server.send(200, "application/json", json);
 }
+
 
 // Connection handling
 unsigned long lastWiFiCheck = 0, lastMQTTCheck = 0;
@@ -410,14 +422,30 @@ void setup() {
   // Connect to WiFi
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi");
-  // while (WiFi.status() != WL_CONNECTED) {
-  //   delay(500);
-  //   Serial.print(".");
-  // }
-  Serial.println("\nConnected!");
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
+  
+  // It's better to wait for connection here so mDNS starts correctly
+  unsigned long startAttemptTime = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
+    delay(500);
+    Serial.print(".");
+  }
 
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nConnected!");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+
+    // --- NEW: Initialize mDNS ---
+    if (!MDNS.begin("flight")) { 
+      Serial.println("Error setting up MDNS responder!");
+    } else {
+      Serial.println("mDNS responder started: http://flight.local");
+      // Add a service to mDNS for HTTP
+      MDNS.addService("http", "tcp", 80);
+    }
+  } else {
+    Serial.println("\nWiFi connection failed. Operating in offline mode.");
+  }
   // Setup MQTT
   mqttClient.setServer(mqtt_server, 1883);
 
@@ -493,6 +521,23 @@ if (millis() - lastBatRead > 1000) {
   gyroX = mpu.getRotationX() / 131.0;  // Convert to deg/s
   gyroY = mpu.getRotationY() / 131.0;
   gyroZ = mpu.getRotationZ() / 131.0;
+
+  // ---- Airspeed estimation (IMU based) ----
+unsigned long nowAirspeed = millis();
+float dtAirspeed = (nowAirspeed - lastAirspeedTime) / 1000.0;
+lastAirspeedTime = nowAirspeed;
+
+// Assume X-axis is forward
+float accelForward = accelX / 16384.0 * 9.81; // m/s^2
+
+airspeed += accelForward * dtAirspeed;
+
+// limit drift
+airspeed = constrain(airspeed, 0.0, 60.0);
+
+// low-pass filter
+airspeedFiltered = 0.9 * airspeedFiltered + 0.1 * airspeed;
+
 
   // Calculate attitude
   float accelRoll = atan2(-accelY, accelZ) * 180 / PI - rollOffset;
@@ -676,6 +721,5 @@ if (!ch8MissionToggle) {
 
   delay(20);
 }
-
 
 
