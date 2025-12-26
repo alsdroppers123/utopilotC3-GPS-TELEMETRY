@@ -184,6 +184,7 @@
       <div class="data-row" title="Altitude in meters"><div class="data-label">Altitude:</div> <div id="altitude" class="data-value">0</div></div>
       <div class="data-row" title="Latitude"><div class="data-label">Latitude:</div> <div id="latitude" class="data-value">0</div></div>
       <div class="data-row" title="Longitude"><div class="data-label">Longitude:</div> <div id="longitude" class="data-value">0</div></div>
+      <div class="data-row" title="Airspeed in m/s"><div class="data-label">Airspeed:</div><div id="airspeed" class="data-value">0</div></div>
       <div class="data-row" title="RC Signal Status"><div class="data-label">Signal:</div> <div id="signal" class="data-value">Unknown</div></div>
       <div class="data-row" title="Altitude Hold"><div class="data-label">Alt Hold:</div> <div id="altHold" class="data-value">Off</div></div>
       <div class="data-row" title="Differential Thrust"><div class="data-label">Diff Thrust:</div> <div id="diffThrust" class="data-value">Off</div></div>
@@ -322,6 +323,11 @@
       if ('batteryVoltage' in data) {
       document.getElementById('batteryVoltage').textContent = data.batteryVoltage.toFixed(2) + " V";
       }
+      
+      if ('airspeed' in data) {
+  document.getElementById('airspeed').textContent =
+    data.airspeed.toFixed(1) + " m/s";
+}
 
 
       if ('pitch' in data && 'roll' in data) drawHorizon(data.pitch, data.roll);
@@ -469,3 +475,4 @@
   </script>
 </body>
 </html>
+
