@@ -27,12 +27,12 @@
 #define BATTERY_ADC_PIN 4
 
 // WiFi & MQTT
-const char* ssid = "abhishekrijal_2.4";
-const char* password = "JWDLY2O936KDK4%";
+const char* ssid = "telemetry";
+const char* password = "telemetry";
 const char* mqtt_server = "test.mosquitto.org";
 const float R1 = 6100; // ohms
 const float R2 = 4600; // ohms
-const float ADC_REF = 3.3; // ESP32-C3 max ADC input voltage
+const float ADC_REF = 3.36; // ESP32-C3 max ADC input voltage
 const int ADC_MAX = 4095;  // 12-bit ADC
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -74,6 +74,16 @@ struct Config {
   // Reversal settings
   bool reverseAileron, reverseElevator;
   bool reverseRightAileron, reverseLeftAileron, reverseElevatorServo;
+
+  // Channel assignment (PPM index 0–8)
+uint8_t chAileron;
+uint8_t chElevator;
+uint8_t chThrottle;
+uint8_t chRudder;
+uint8_t chAux1;
+uint8_t chAux2;
+uint8_t chMission;
+
 } config;
 
 #define EEPROM_SIZE sizeof(Config)
@@ -112,13 +122,12 @@ float yawErrorSum = 0, lastYawError = 0;
 String gpsLatitude = "0.0";
 String gpsLongitude = "0.0";
 
-// Macros for channel access
-#define ch1Value ppmChannels[0]
-#define ch2Value ppmChannels[1]
-#define ch3Value ppmChannels[2]
-#define ch4Value ppmChannels[3]
-#define ch7Value ppmChannels[6]
-#define ch9Value ppmChannels[4]
+
+
+inline uint16_t CH(uint8_t ch) {
+  return ppmChannels[ch];
+}
+
 
 
 // PPM Interrupt Service Routine
@@ -166,6 +175,15 @@ void loadEEPROM() {
     config.reverseRightAileron = false;
     config.reverseLeftAileron = false;
     config.reverseElevatorServo = false;
+
+    config.chAileron  = 0; // CH1
+    config.chElevator = 1; // CH2
+    config.chThrottle = 2; // CH3
+    config.chRudder   = 3; // CH4
+    config.chAux1     = 4; // CH5
+    config.chAux2     = 5; // CH6
+    config.chMission  = 7; // CH8
+
     
     EEPROM.put(0, config);
     EEPROM.commit();
@@ -192,8 +210,54 @@ void handleRoot() {
     h1, h2 {
       color: #333;
     }
+
+    body {
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #0f172a;
+  color: #e5e7eb;
+  margin: 0;
+  padding: 10px;
+}
+.card {
+  background: #020617;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 15px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.4);
+}
+h1, h2 {
+  color: #38bdf8;
+}
+label {
+  display: block;
+  margin-top: 8px;
+}
+input, select {
+  width: 100%;
+  padding: 6px;
+  border-radius: 6px;
+  border: none;
+  margin-top: 4px;
+}
+button {
+  margin-top: 12px;
+  padding: 10px;
+  width: 100%;
+  background: #38bdf8;
+  color: #020617;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+}
+.small {
+  font-size: 14px;
+  color: #94a3b8;
+}
   </style>
+
   <script>
+
+
     function fetchGPS() {
       fetch('/gps')
         .then(response => response.json())
@@ -204,7 +268,9 @@ void handleRoot() {
     }
     setInterval(fetchGPS, 1000);
     window.onload = fetchGPS;
-  </script></head><body>
+  </script>
+  </head>
+  <body>
   <div class="section">
     <h1>Stabilization PID Settings</h1>
     <form method='GET' action='/update'>
@@ -256,12 +322,57 @@ void handleRoot() {
     <form action='/calibrate'><input type='submit' value='Calibrate IMU'></form>
   </div>
 
+  <div class="card">
+<h2>Channel Assignment</h2>
+<form action="/assign">
+
+<label>Aileron</label>
+<select name="aileron">
+<option value="0">CH1</option><option value="1">CH2</option>
+<option value="2">CH3</option><option value="3">CH4</option>
+<option value="4">CH5</option><option value="5">CH6</option>
+<option value="6">CH7</option><option value="7">CH8</option>
+</select>
+
+<label>Elevator</label>
+<select name="elevator">
+<option value="0">CH1</option><option value="1">CH2</option>
+<option value="2">CH3</option><option value="3">CH4</option>
+<option value="4">CH5</option><option value="5">CH6</option>
+<option value="6">CH7</option><option value="7">CH8</option>
+</select>
+
+<label>Throttle</label>
+<select name="throttle">
+<option value="2">CH3</option>
+<option value="0">CH1</option><option value="1">CH2</option>
+<option value="3">CH4</option>
+</select>
+
+<label>Rudder</label>
+<select name="rudder">
+<option value="3">CH4</option>
+<option value="0">CH1</option><option value="1">CH2</option>
+</select>
+
+<label>Mission Switch</label>
+<select name="mission">
+<option value="7">CH8</option>
+<option value="6">CH7</option>
+</select>
+
+<button type="submit">Save Channel Mapping</button>
+</form>
+</div>
+
   <div class="section">
     <h2>GPS Coordinates</h2>
     Latitude: <span id='lat'>Loading...</span><br>
     Longitude: <span id='lon'>Loading...</span><br>
   </div>
   </body></html>
+
+
   )rawliteral";
   server.send(200, "text/html", html);
 }
@@ -315,6 +426,17 @@ void handleGPS() {
   json += "}";
   server.send(200, "application/json", json);
 }
+
+void handleAssign() {
+  config.chAileron  = server.arg("aileron").toInt();
+  config.chElevator = server.arg("elevator").toInt();
+  config.chThrottle = server.arg("throttle").toInt();
+  config.chRudder   = server.arg("rudder").toInt();
+  config.chMission  = server.arg("mission").toInt();
+  saveEEPROM();
+  server.send(200, "text/plain", "Channel mapping saved. Reboot recommended.");
+}
+
 
 
 // Connection handling
@@ -455,6 +577,7 @@ void setup() {
   server.on("/reverse", handleReverse);
   server.on("/reverseServos", handleReverseServos);
   server.on("/calibrate", handleCalibrate);
+  server.on("/assign", handleAssign);
   server.on("/gps", handleGPS);
   server.begin();
 
@@ -483,6 +606,9 @@ void loop() {
       gpsLatitude = String(gps.location.lat(), 6);
       gpsLongitude = String(gps.location.lng(), 6);
     }
+      if (gps.speed.isValid()) {
+    airspeed = gps.speed.mps();  // meters per second
+  }
   }
 
 static unsigned long lastBatRead = 0;
@@ -500,14 +626,14 @@ if (millis() - lastBatRead > 1000) {
   currentAltitude = bmp.readAltitude(1013.25);
   
   // Check flight modes
-  bool newAltHold = ch9Value >= 1800;
+  bool newAltHold = CH(config.chAux1) >= 1800;
   if (newAltHold && !altitudeHoldEngaged) {
     targetAltitude = currentAltitude;
     altitudeHoldEngaged = true;
   } else if (!newAltHold) altitudeHoldEngaged = false;
   altitudeHoldEnabled = newAltHold;
-  gyroStabilizationEnabled = (ch9Value >= 1400);
-  differentialThrustEnabled = (ch7Value >= 1500);
+  gyroStabilizationEnabled = (CH(config.chAux1) >= 1400);
+  differentialThrustEnabled = (CH(config.chAux2) >= 1500);
 
   // Calculate time delta
   unsigned long now = millis();
@@ -523,20 +649,21 @@ if (millis() - lastBatRead > 1000) {
   gyroZ = mpu.getRotationZ() / 131.0;
 
   // ---- Airspeed estimation (IMU based) ----
-unsigned long nowAirspeed = millis();
-float dtAirspeed = (nowAirspeed - lastAirspeedTime) / 1000.0;
-lastAirspeedTime = nowAirspeed;
+// unsigned long nowAirspeed = millis();
+// float dtAirspeed = (nowAirspeed - lastAirspeedTime) / 1000.0;
+// lastAirspeedTime = nowAirspeed;
 
-// Assume X-axis is forward
-float accelForward = accelX / 16384.0 * 9.81; // m/s^2
+// // Assume X-axis is forward
+// float accelForward = accelX / 16384.0 * 9.81; // m/s^2
 
-airspeed += accelForward * dtAirspeed;
+// airspeed += accelForward * dtAirspeed;
 
-// limit drift
-airspeed = constrain(airspeed, 0.0, 60.0);
+// // limit drift
+// airspeed = constrain(airspeed, 0.0, 60.0);
 
-// low-pass filter
-airspeedFiltered = 0.9 * airspeedFiltered + 0.1 * airspeed;
+// Low-pass filter GPS airspeed
+airspeedFiltered = 0.8 * airspeedFiltered + 0.2 * airspeed;
+
 
 
   // Calculate attitude
@@ -546,9 +673,9 @@ airspeedFiltered = 0.9 * airspeedFiltered + 0.1 * airspeed;
   pitchFiltered = 0.98 * (pitchFiltered + gyroY * dt) + 0.02 * accelPitch;
 
   // Initialize target positions from RC input
-  int targetAileron = constrain(map(ch1Value, 1000, 2000, 0, 180), 0, 180);
-  int targetElevator = constrain(map(ch2Value, 1000, 2000, 0, 180), 0, 180);
-  int targetRudder = constrain(map(ch4Value, 1000, 2000, 0, 180), 0, 180);
+  int targetAileron = constrain(map(CH(config.chAileron), 1000, 2000, 0, 180), 0, 180);
+  int targetElevator = constrain(map(CH(config.chElevator), 1000, 2000, 0, 180), 0, 180);
+  int targetRudder = constrain(map(CH(config.chRudder), 1000, 2000, 0, 180), 0, 180);
 
   // Apply gyro stabilization if enabled
   if (gyroStabilizationEnabled) {
@@ -608,7 +735,7 @@ airspeedFiltered = 0.9 * airspeedFiltered + 0.1 * airspeed;
   float alpha = 0.5;
   smoothAileron = alpha * targetAileron + (1 - alpha) * smoothAileron;
   smoothElevator = alpha * (targetElevator + altitudePitchCorrection) + (1 - alpha) * smoothElevator;
-  throttleSignal = constrain(ch3Value + altitudeCorrection, 1000, 2000);
+  throttleSignal = constrain(CH(config.chThrottle)+ altitudeCorrection, 1000, 2000);
 
   // Apply servo reversals
   int rightAileronPos = smoothAileron;
@@ -638,7 +765,7 @@ airspeedFiltered = 0.9 * airspeedFiltered + 0.1 * airspeed;
 
   // Handle differential thrust
   if (differentialThrustEnabled) {
-    int yawOffset = map(ch4Value, 1000, 2000, -100, 100);
+    int yawOffset = map(CH(config.chRudder), 1000, 2000, -100, 100);
     int esc1Throttle = constrain(throttleSignal + yawOffset, 1000, 2000);
     int esc2Throttle = constrain(throttleSignal - yawOffset, 1000, 2000);
     esc1.writeMicroseconds(esc1Throttle);
@@ -665,7 +792,8 @@ airspeedFiltered = 0.9 * airspeedFiltered + 0.1 * airspeed;
     mqttClient.publish("esp32/telemetry", telemetryJson.c_str());
     lastMqttPublish = millis();
   }
-  bool ch8MissionToggle = (ppmChannels[7] >= 1800);  // CH8 high = mission active
+  bool ch8MissionToggle = (CH(config.chMission) >= 1800);
+
 
 if (ch8MissionToggle && !missionStarted && waypointCount > 0) {
   missionStarted = true;
